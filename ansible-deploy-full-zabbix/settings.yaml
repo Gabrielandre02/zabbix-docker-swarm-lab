@@ -1,0 +1,6 @@
+network:
+  control_ip: ${IPS_VMS}
+nodes:
+  control:
+    cpu: 2
+    memory: 4096

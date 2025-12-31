@@ -1,0 +1,12 @@
+- name: Configurar PostgreSQL e Database do Zabbix
+  hosts: postgres_servers
+  become: true
+  roles:
+    - postgresql
+    - zabbix_db
+
+- name: Configurar Swarm e Deploy do Zabbix
+  hosts: host_swarm
+  become: true
+  roles:
+    - zbx-docker

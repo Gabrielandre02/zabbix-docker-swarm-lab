@@ -1,0 +1,39 @@
+docker_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-compose-plugin
+
+docker_swarm_tcp_ports:
+  - 2377
+  - 7946
+  - 80
+  - 443
+  - 10050
+  - 10051
+  - 10052
+  - 8080
+
+docker_swarm_udp_ports:
+  - 2377
+  - 7946
+  - 4789
+  - 5000
+
+zabbix_directories:
+  - /data/zabbix-prod/zabbix-server/alertscripts
+  - /data/zabbix-prod/zabbix-server/externalscripts
+  - /data/zabbix-prod/zabbix-proxy/externalscripts
+  - /data/grafana-prod/data
+
+# ALTERAR A VERSAO DO ZABBIX E A URL DE ACESSO AO AMBIENTE DO ZABBIX
+zabbix_image_version: "7.0.6-alpine"
+grafana_image_version: "11.4.0"
+zabbix_domain: "exemplo.com.br"
+zabbix_stack_name: "zbx-swarm"
+ip_data_base: "{{ ansible_host }}"
+docker_compose_files:
+  - "{{ clone_directory }}/docker-compose.traefik.yaml"
+  - "{{ clone_directory }}/docker-compose.prod.yaml"
+
+clone_directory: "/data/zbx-files"

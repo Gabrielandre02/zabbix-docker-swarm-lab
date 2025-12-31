@@ -1,0 +1,101 @@
+- name: Set timezone
+  ansible.builtin.command:
+    cmd: timedatectl set-timezone {{ timezone }}
+  when: ansible_date_time.tz != timezone
+
+- name: Clean up DNF cache
+  ansible.builtin.command:
+    cmd: dnf clean all
+
+- name: Install required packages
+  ansible.builtin.yum:
+    name:
+      - yum-utils
+      - device-mapper-persistent-data
+      - lvm2
+    state: present
+    disable_gpg_check: yes
+    disablerepo: zabbix-non-supported
+
+- name: Add Docker CE repository
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/centos/docker-ce.repo
+    dest: /etc/yum.repos.d/docker-ce.repo
+    mode: '0644'
+
+- name: Install Docker packages
+  ansible.builtin.yum:
+    name: "{{ docker_packages }}"
+    state: present
+
+- name: Enable and start Docker service
+  ansible.builtin.systemd:
+    name: docker
+    enabled: true
+    state: started
+
+- name: Verify Docker installation
+  ansible.builtin.command:
+    cmd: docker version
+  register: docker_version
+  failed_when: docker_version.rc != 0
+
+- name: Check if Docker Swarm is initialized
+  ansible.builtin.command:
+    cmd: docker info --format '{{ "{{ .Swarm.LocalNodeState }}" }}'
+  register: swarm_status
+  failed_when: swarm_status.rc != 0 and "inactive" not in swarm_status.stdout
+
+- name: Initialize Docker Swarm
+  ansible.builtin.command:
+    cmd: docker swarm init --advertise-addr {{ ansible_host }}
+  when: swarm_status.stdout != "active"
+
+- name: Check if the monitoring network exists
+  ansible.builtin.command:
+    cmd: docker network inspect monitoring-network
+  register: network_status
+  failed_when: network_status.rc != 0 and "network monitoring-network not found" not in network_status.stderr
+  
+- name: Create overlay network for monitoring
+  ansible.builtin.command:
+    cmd: docker network create --driver overlay monitoring-network
+  when: network_status.rc != 0
+
+- name: Copiar arquivos do Zabbix para a pasta especificada
+  ansible.builtin.copy:
+    src: .
+    dest: "{{ clone_directory }}"
+    remote_src: no
+
+- name: Atualizar IP no arquivo de variáveis de ambiente
+  ansible.builtin.lineinfile:
+    path: "{{ clone_directory }}/envs/dbzbx_prod.env"
+    regexp: '^DB_SERVER_HOST=.*$'
+    line: "DB_SERVER_HOST={{ ip_data_base }}"
+    create: yes
+
+- name: Create Zabbix directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0777'
+  loop: "{{ zabbix_directories }}"
+
+- name: Remove stack Docker Swarm
+  ansible.builtin.command:
+    cmd: docker stack rm "{{ zabbix_stack_name }}"
+
+- name: Deploy Zabbix stack with Docker Swarm
+  ansible.builtin.command:
+    cmd: docker stack deploy --compose-file {{ item }} "{{ zabbix_stack_name }}"
+  loop: "{{ docker_compose_files }}"
+  environment:
+    ZBX_IMAGE_VERSION: "{{ zabbix_image_version }}"
+    DOMAIN_URL: "{{ zabbix_domain }}"
+    IP_DATABASE: "{{ ip_data_base }}"
+    GRAFANA_IMAGE_VERSION: "{{ grafana_image_version }}"
+
+- name: Clean up temporary Compose files
+  ansible.builtin.command:
+    cmd: "rm -rf {{ clone_directory }}"

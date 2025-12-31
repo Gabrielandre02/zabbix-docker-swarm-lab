@@ -1,0 +1,108 @@
+---
+- name: Set timezone to America/Sao_Paulo
+  ansible.builtin.command:
+    cmd: timedatectl set-timezone America/Sao_Paulo
+  when: ansible_date_time.tz != "America/Sao_Paulo"
+  changed_when: false
+- name: Ensure Chronyd is enabled and running
+  ansible.builtin.systemd:
+    name: chronyd
+    enabled: true
+    state: started
+- name: Install required dependencies
+  ansible.builtin.yum:
+    name:
+      - net-tools
+      - firewalld
+      - curl
+      - wget
+      - vim
+      - git
+    state: present
+- name: Disable SELinux if enabled
+  block:
+    - name: Set SELinux to disabled permanently
+      ansible.builtin.replace:
+        path: /etc/selinux/config
+        regexp: '^SELINUX=.*'
+        replace: 'SELINUX=disabled'
+    - name: Set SELinux to permissive temporarily
+      ansible.builtin.command:
+        cmd: setenforce 0
+      ignore_errors: true
+  when: ansible_selinux.status != "disabled"
+
+- name: Install PostgreSQL repository
+  ansible.builtin.yum:
+    name: https://download.postgresql.org/pub/repos/yum/reporpms/EL-9-x86_64/pgdg-redhat-repo-latest.noarch.rpm
+    state: present
+    disable_gpg_check: yes
+
+- name: Install PostgreSQL 16 and dependencies
+  ansible.builtin.yum:
+    name:
+      - postgresql16
+      - postgresql16-server
+      - postgresql16-contrib
+    state: present
+
+- name: Initialize and start PostgreSQL
+  block:
+    - name: Initialize PostgreSQL 16 database
+      ansible.builtin.command:
+        cmd: /usr/pgsql-16/bin/postgresql-16-setup initdb
+      args:
+        creates: /var/lib/pgsql/16/data/PG_VERSION
+    - name: Enable and start PostgreSQL service
+      ansible.builtin.systemd:
+        name: postgresql-16
+        enabled: true
+        state: started
+
+- name: Initialize TimescaleDB repository
+  ansible.builtin.copy:
+    dest: /etc/yum.repos.d/timescale_timescaledb.repo
+    content: |
+      [timescale_timescaledb]
+      name=timescale_timescaledb
+      baseurl=https://packagecloud.io/timescale/timescaledb/el/9/\$basearch
+      repo_gpgcheck=1
+      gpgcheck=1
+      enabled=1
+      gpgkey=https://packagecloud.io/timescale/timescaledb/gpgkey
+      sslverify=1
+      sslcacert=/etc/pki/tls/certs/ca-bundle.crt
+      metadata_expire=300
+    owner: root
+    group: root
+    mode: '0644'
+- name: Install TimescaleDB
+  ansible.builtin.yum:
+    name:
+      - timescaledb-2-postgresql-16-2.17.0-0.el9.x86_64
+      - timescaledb-2-loader-postgresql-16-2.17.0-0.el9.x86_64
+    state: present
+    disable_gpg_check: yes
+
+- name: Configure pg_hba.conf for MD5 authentication
+  ansible.builtin.lineinfile:
+    path: /var/lib/pgsql/16/data/pg_hba.conf
+    line: 'host  all  all  0.0.0.0/0  md5'
+    state: present
+    backup: yes
+    insertafter: EOF
+
+- name: Configurar parâmetros no postgresql.conf
+  lineinfile:
+    path: /var/lib/pgsql/16/data/postgresql.conf
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+    state: present
+  with_items:
+    - { regexp: '^password_encryption\\s*=.*$', line: 'password_encryption = md5' }
+    - { regexp: '^listen_addresses\\s*=.*$', line: "listen_addresses = '*'" }
+
+- name: Reiniciar o serviço PostgreSQL
+  ansible.builtin.systemd:
+    name: postgresql-16
+    state: restarted

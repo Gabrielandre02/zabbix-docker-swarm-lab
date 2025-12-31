@@ -1,0 +1,109 @@
+version: "3.7"
+
+x-deploy: &template-deploy
+  replicas: 1
+  restart_policy:
+    condition: any
+  update_config:
+    parallelism: 1
+    delay: 10s
+
+x-service-proxy: &template-proxy
+  image: zabbix/zabbix-proxy-sqlite3:${ZBX_IMAGE_VERSION}
+  env_file: 
+    - ./envs/zabbix-proxy/common.env
+  networks:
+    - "monitoring-network"
+  volumes:
+    - '/etc/hostname:/var/lib/zabbix/hostname:ro'  
+    - /data/zabbix-prod/zabbix-proxy/externalscripts:/usr/lib/zabbix/externalscripts:ro
+  deploy: 
+    <<: *template-deploy
+    placement: {"constraints": [node.role == manager]}
+    labels:
+      - "traefik.enable=false"
+
+
+services:
+  zabbix-server:
+    image: zabbix/zabbix-server-pgsql:${ZBX_IMAGE_VERSION}
+    env_file: 
+      - ./envs/dbzbx_prod.env
+      - ./envs/zabbix-server/common.env
+    networks:
+      - "monitoring-network"
+    volumes:
+      - /data/zabbix-prod/zabbix-server/externalscripts:/user/lib/zabbix/externalscripts:ro
+      - /data/zabbix-prod/zabbix-server/alertscripts:/user/lib/zabbix/alertscripts:ro
+    ports:
+      - "0.0.0.0:10051:10051"
+    deploy: 
+      <<: *template-deploy
+      replicas: 1
+      labels:
+        - "traefik.enable=false"
+      
+  zabbix-frontend:
+    image: zabbix/zabbix-web-nginx-pgsql:${ZBX_IMAGE_VERSION}
+    env_file: 
+      - ./envs/dbzbx_prod.env
+      - ./envs/zabbix-frontend/common.env
+    networks:
+      - "monitoring-network"
+    volumes:
+      - '/etc/hostname:/var/lib/zabbix/hostname:ro'      
+    deploy: 
+      <<: *template-deploy
+      replicas: 1
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.zbx-frontend.entrypoints=web"
+        - "traefik.http.routers.zbx-frontend.rule=(Host(`zabbix.${DOMAIN_URL}`) || Host(`zabbix.local`))"
+        - "traefik.http.services.zbx-frontend.loadbalancer.server.port=8080"
+
+  zabbix-java-gateway:
+    image: zabbix/zabbix-java-gateway:${ZBX_IMAGE_VERSION}
+    env_file: 
+      - ./envs/zabbix-java/commom.env
+    networks:
+      - "monitoring-network"
+    ports:
+      - "0.0.0.0:10052:10052"
+    deploy: 
+      <<: *template-deploy
+      replicas: 1
+      labels:
+        - "traefik.enable=false"
+
+  docker-prx-001:
+    <<: *template-proxy
+    environment: ["ZBX_HOSTNAME=ZBXSWARNPRX01"]
+    ports:
+      - "0.0.0.0:10030:10051"
+  docker-prx-002:
+    <<: *template-proxy
+    environment: ["ZBX_HOSTNAME=ZBXSWARNPRX02"]
+    ports:
+      - "0.0.0.0:10031:10051"
+
+  grafana:
+    image: grafana/grafana:${GRAFANA_IMAGE_VERSION}
+    volumes:
+      - "/data/grafana-prod/data:/var/lib/grafana"
+      - '/etc/hostname:/var/lib/zabbix/hostname:ro'
+    environment:
+      - GF_INSTALL_PLUGINS=alexanderzobnin-zabbix-app
+    networks:
+      - "monitoring-network"
+    deploy: 
+      <<: *template-deploy
+      replicas: 1
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.grafana-frontend.entrypoints=web"
+        - "traefik.http.routers.grafana-frontend.rule=(Host(`grafana.${DOMAIN_URL}`) || Host(`grafana.local`))"
+        - "traefik.http.services.grafana-frontend.loadbalancer.server.port=3000"
+
+networks: 
+  monitoring-network:
+    external: true
