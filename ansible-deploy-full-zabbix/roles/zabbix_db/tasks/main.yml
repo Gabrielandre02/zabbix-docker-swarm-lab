@@ -1,8 +1,19 @@
+- name: Set Zabbix repo architecture
+  ansible.builtin.set_fact:
+    zabbix_arch: "{{ zabbix_arch_map.get(ansible_facts['architecture'], 'x86_64') }}"
+    timescaledb_supported: "{{ ansible_facts['architecture'] in ['x86_64', 'amd64'] }}"
+  vars:
+    zabbix_arch_map:
+      aarch64: aarch64
+      arm64: aarch64
+      x86_64: x86_64
+      amd64: x86_64
+
 - name: Importar repositório Zabbix
   ansible.builtin.yum:
-    name: https://repo.zabbix.com/zabbix/7.0/rhel/9/x86_64/zabbix-release-7.0-5.el9.noarch.rpm
+    name: "https://repo.zabbix.com/zabbix/7.0/rhel/9/{{ zabbix_arch }}/zabbix-release-7.0-5.el9.noarch.rpm"
     state: present
-    disable_gpg_check: yes
+    disable_gpg_check: true
 
 - name: Ensure zabbix user exists
   ansible.builtin.user:
@@ -37,6 +48,15 @@
     regexp: '^shared_preload_libraries'
     line: "shared_preload_libraries = 'timescaledb'"
     insertafter: '^#.*shared_preload_libraries'
+  when: timescaledb_supported
+
+- name: Remover timescaledb do shared_preload_libraries quando não suportado
+  ansible.builtin.lineinfile:
+    path: /var/lib/pgsql/16/data/postgresql.conf
+    regexp: '^shared_preload_libraries'
+    line: "shared_preload_libraries = ''"
+    insertafter: '^#.*shared_preload_libraries'
+  when: not timescaledb_supported
 
 - name: Reiniciar o serviço PostgreSQL
   ansible.builtin.systemd:
@@ -66,6 +86,7 @@
   args:
     executable: /bin/bash
   become_user: postgres
+  when: timescaledb_supported
 
 - name: Importar script TimescaleDB para o banco Zabbix
   ansible.builtin.shell: >
@@ -73,3 +94,4 @@
   args:
     executable: /bin/bash
   become_user: postgres
+  when: timescaledb_supported

@@ -1,11 +1,12 @@
 - name: Set timezone
   ansible.builtin.command:
     cmd: timedatectl set-timezone {{ timezone }}
-  when: ansible_date_time.tz != timezone
+  when: ansible_facts["date_time"]["tz"] != timezone
 
 - name: Clean up DNF cache
   ansible.builtin.command:
     cmd: dnf clean all
+  changed_when: false
 
 - name: Install required packages
   ansible.builtin.yum:
@@ -13,20 +14,146 @@
       - yum-utils
       - device-mapper-persistent-data
       - lvm2
+      - firewalld
+      - python3-firewall
+      - openssl
     state: present
     disable_gpg_check: yes
     disablerepo: zabbix-non-supported
 
+- name: Enable and start firewalld
+  ansible.builtin.systemd:
+    name: firewalld
+    enabled: true
+    state: started
+
+- name: Open TCP ports in firewalld
+  block:
+    - name: Open TCP ports with firewalld module
+      ansible.posix.firewalld:
+        zone: "{{ firewall_zone }}"
+        port: "{{ item }}/tcp"
+        permanent: true
+        immediate: true
+        state: enabled
+      loop: "{{ docker_swarm_tcp_ports }}"
+  rescue:
+    - name: Open TCP ports with firewall-cmd
+      ansible.builtin.command:
+        cmd: "firewall-cmd --zone={{ firewall_zone }} --permanent --add-port={{ item }}/tcp"
+      loop: "{{ docker_swarm_tcp_ports }}"
+      notify: Reload firewall
+
+- name: Open UDP ports in firewalld
+  block:
+    - name: Open UDP ports with firewalld module
+      ansible.posix.firewalld:
+        zone: "{{ firewall_zone }}"
+        port: "{{ item }}/udp"
+        permanent: true
+        immediate: true
+        state: enabled
+      loop: "{{ docker_swarm_udp_ports }}"
+  rescue:
+    - name: Open UDP ports with firewall-cmd
+      ansible.builtin.command:
+        cmd: "firewall-cmd --zone={{ firewall_zone }} --permanent --add-port={{ item }}/udp"
+      loop: "{{ docker_swarm_udp_ports }}"
+      notify: Reload firewall
+
+- name: Check permanent TCP ports in firewalld
+  ansible.builtin.command:
+    cmd: "firewall-cmd --zone={{ firewall_zone }} --permanent --query-port={{ item }}/tcp"
+  register: firewalld_tcp_perm_check
+  changed_when: false
+  failed_when: false
+  loop: "{{ docker_swarm_tcp_ports }}"
+  loop_control:
+    index_var: tcp_perm_idx
+
+- name: Fix missing permanent TCP ports
+  ansible.builtin.command:
+    cmd: "firewall-cmd --zone={{ firewall_zone }} --permanent --add-port={{ item }}/tcp"
+  when: firewalld_tcp_perm_check.results[tcp_perm_idx].rc != 0
+  loop: "{{ docker_swarm_tcp_ports }}"
+  loop_control:
+    index_var: tcp_perm_idx
+  notify: Reload firewall
+
+- name: Check permanent UDP ports in firewalld
+  ansible.builtin.command:
+    cmd: "firewall-cmd --zone={{ firewall_zone }} --permanent --query-port={{ item }}/udp"
+  register: firewalld_udp_perm_check
+  changed_when: false
+  failed_when: false
+  loop: "{{ docker_swarm_udp_ports }}"
+  loop_control:
+    index_var: udp_perm_idx
+
+- name: Fix missing permanent UDP ports
+  ansible.builtin.command:
+    cmd: "firewall-cmd --zone={{ firewall_zone }} --permanent --add-port={{ item }}/udp"
+  when: firewalld_udp_perm_check.results[udp_perm_idx].rc != 0
+  loop: "{{ docker_swarm_udp_ports }}"
+  loop_control:
+    index_var: udp_perm_idx
+  notify: Reload firewall
+
 - name: Add Docker CE repository
+  ansible.builtin.stat:
+    path: /etc/yum.repos.d/docker-ce.repo
+  register: docker_repo_stat
+  changed_when: false
+
+- name: Configure Docker CE repository
   ansible.builtin.get_url:
     url: https://download.docker.com/linux/centos/docker-ce.repo
     dest: /etc/yum.repos.d/docker-ce.repo
     mode: '0644'
+  when: not docker_repo_stat.stat.exists
+
+- name: Check Docker CLI
+  ansible.builtin.command:
+    cmd: docker --version
+  register: docker_cli_check
+  failed_when: false
+  changed_when: false
+
+- name: Parse Docker version
+  ansible.builtin.set_fact:
+    docker_version_full: "{{ docker_cli_check.stdout | regex_search('([0-9]+\\.[0-9]+\\.[0-9]+)') | default('') }}"
+  changed_when: false
+
+- name: Definir se precisa instalar Docker
+  ansible.builtin.set_fact:
+    docker_needs_install: >-
+      {{
+        docker_cli_check.rc != 0
+        or (docker_version_full | length == 0)
+        or (docker_version_full is version(docker_min_version, '<'))
+      }}
+  changed_when: false
+
+- name: Remove old Docker packages
+  ansible.builtin.yum:
+    name:
+      - docker
+      - docker-client
+      - docker-client-latest
+      - docker-common
+      - docker-latest
+      - docker-latest-logrotate
+      - docker-logrotate
+      - docker-engine
+      - podman-docker
+    state: absent
+  when: docker_needs_install
 
 - name: Install Docker packages
   ansible.builtin.yum:
     name: "{{ docker_packages }}"
     state: present
+  when: docker_needs_install
 
 - name: Enable and start Docker service
   ansible.builtin.systemd:
@@ -39,12 +166,15 @@
     cmd: docker version
   register: docker_version
   failed_when: docker_version.rc != 0
+  changed_when: false
+  when: docker_needs_install
 
 - name: Check if Docker Swarm is initialized
   ansible.builtin.command:
     cmd: docker info --format '{{ "{{ .Swarm.LocalNodeState }}" }}'
   register: swarm_status
   failed_when: swarm_status.rc != 0 and "inactive" not in swarm_status.stdout
+  changed_when: false
 
 - name: Initialize Docker Swarm
   ansible.builtin.command:
@@ -56,46 +186,238 @@
     cmd: docker network inspect monitoring-network
   register: network_status
   failed_when: network_status.rc != 0 and "network monitoring-network not found" not in network_status.stderr
+  changed_when: false
   
 - name: Create overlay network for monitoring
   ansible.builtin.command:
     cmd: docker network create --driver overlay monitoring-network
   when: network_status.rc != 0
 
-- name: Copiar arquivos do Zabbix para a pasta especificada
-  ansible.builtin.copy:
-    src: .
-    dest: "{{ clone_directory }}"
-    remote_src: no
+- name: Garantir diretorio de deploy
+  ansible.builtin.file:
+    path: "{{ clone_directory }}"
+    state: directory
+    mode: '0755'
 
-- name: Atualizar IP no arquivo de variáveis de ambiente
-  ansible.builtin.lineinfile:
-    path: "{{ clone_directory }}/envs/dbzbx_prod.env"
-    regexp: '^DB_SERVER_HOST=.*$'
-    line: "DB_SERVER_HOST={{ ip_data_base }}"
-    create: yes
+- name: Garantir diretorios de certificados do Traefik
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - "{{ clone_directory }}/data_internal/traefik"
+    - "{{ clone_directory }}/data_internal/traefik/certs"
+
+- name: Verificar certificado do Traefik
+  ansible.builtin.stat:
+    path: "{{ clone_directory }}/data_internal/traefik/certs/traefik.crt"
+  register: traefik_cert_stat
+  changed_when: false
+
+- name: Ler dominio atual do certificado
+  ansible.builtin.slurp:
+    src: "{{ clone_directory }}/data_internal/traefik/.cert_domain"
+  register: traefik_cert_domain_prev
+  failed_when: false
+  changed_when: false
+
+- name: Definir se precisa gerar certificado
+  ansible.builtin.set_fact:
+    traefik_cert_needs_regen: >-
+      {{
+        (not traefik_cert_stat.stat.exists)
+        or ((traefik_cert_domain_prev.content | default('') | b64decode | trim) != zabbix_domain)
+      }}
+  changed_when: false
+
+- name: Remover certificado antigo do Traefik
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ clone_directory }}/data_internal/traefik/certs/traefik.crt"
+    - "{{ clone_directory }}/data_internal/traefik/certs/traefik.key"
+  when: traefik_cert_needs_regen
+
+- name: Gerar certificado autoassinado do Traefik
+  ansible.builtin.command:
+    cmd: >-
+      openssl req -x509 -nodes -days 3650 -newkey rsa:2048
+      -keyout {{ clone_directory }}/data_internal/traefik/certs/traefik.key
+      -out {{ clone_directory }}/data_internal/traefik/certs/traefik.crt
+      -subj "/CN={{ zabbix_domain }}"
+      -addext "subjectAltName=DNS:{{ zabbix_domain }},DNS:*.{{ zabbix_domain }},DNS:traefik.{{ zabbix_domain }},DNS:zabbix.{{ zabbix_domain }},DNS:grafana.{{ zabbix_domain }}"
+  when: traefik_cert_needs_regen
+
+- name: Salvar dominio do certificado
+  ansible.builtin.copy:
+    dest: "{{ clone_directory }}/data_internal/traefik/.cert_domain"
+    content: "{{ zabbix_domain }}"
+    mode: '0644'
+  when: traefik_cert_needs_regen
+
+- name: Gerar configuracao de certificados do Traefik
+  ansible.builtin.template:
+    src: certs-traefik.yml.j2
+    dest: "{{ clone_directory }}/data_internal/traefik/certs-traefik.yml"
+    mode: '0644'
+  register: zbx_traefik_certs_cfg
+
+- name: Copiar docker-compose.traefik.yaml
+  ansible.builtin.copy:
+    src: docker-compose.traefik.yaml
+    dest: "{{ clone_directory }}/docker-compose.traefik.yaml"
+    mode: '0644'
+  register: zbx_traefik_compose
+
+- name: Copiar arquivos de env
+  ansible.builtin.copy:
+    src: envs/
+    dest: "{{ clone_directory }}/envs"
+    mode: '0644'
+    directory_mode: '0755'
+  register: zbx_envs_copy
+
+- name: Gerar docker-compose.prod.yaml com proxies dinamicos
+  ansible.builtin.template:
+    src: docker-compose.prod.yaml.j2
+    dest: "{{ clone_directory }}/docker-compose.prod.yaml"
+  register: zbx_compose_template
+
+- name: Check hash file
+  ansible.builtin.stat:
+    path: "{{ clone_directory }}/.zbx_stack_hash"
+  register: zbx_hash_file_stat
+  changed_when: false
+
+- name: Definir se precisa calcular hash
+  ansible.builtin.set_fact:
+    zbx_need_hash_check: >-
+      {{
+        force_hash_check
+        or not zbx_hash_file_stat.stat.exists
+        or (zbx_traefik_compose.changed or zbx_envs_copy.changed or zbx_compose_template.changed)
+        or (zbx_traefik_certs_cfg is defined and zbx_traefik_certs_cfg.changed)
+        or traefik_cert_needs_regen
+      }}
+  changed_when: false
+
+- name: Definir stack como inalterada quando hash nao for necessario
+  ansible.builtin.set_fact:
+    zbx_stack_changed: false
+  when: not zbx_need_hash_check
+  changed_when: false
+
+- name: Listar arquivos de env
+  ansible.builtin.find:
+    paths: "{{ clone_directory }}/envs"
+    file_type: file
+  register: zbx_env_files
+  changed_when: false
+  when: zbx_need_hash_check
+
+- name: Definir lista de arquivos para hash
+  ansible.builtin.set_fact:
+    zbx_hash_files: >-
+      {{
+        [
+          clone_directory + '/docker-compose.traefik.yaml',
+          clone_directory + '/docker-compose.prod.yaml',
+          clone_directory + '/data_internal/traefik/certs-traefik.yml',
+          clone_directory + '/data_internal/traefik/certs/traefik.crt',
+          clone_directory + '/data_internal/traefik/certs/traefik.key'
+        ]
+        + (zbx_env_files.files | map(attribute='path') | list)
+      }}
+  changed_when: false
+  when: zbx_need_hash_check
+
+- name: Coletar checksums dos arquivos de deploy
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    checksum_algorithm: sha256
+  loop: "{{ zbx_hash_files }}"
+  register: zbx_checksum_results
+  changed_when: false
+  when: zbx_need_hash_check
+
+- name: Montar conteudo do hash da stack
+  ansible.builtin.set_fact:
+    zbx_stack_hash_content: |
+      {% for r in zbx_checksum_results.results | selectattr('stat.exists') | sort(attribute='item') %}
+      {{ r.item }} {{ r.stat.checksum }}
+      {% endfor %}
+  changed_when: false
+  when: zbx_need_hash_check
+
+- name: Ler hash anterior da stack
+  ansible.builtin.slurp:
+    src: "{{ clone_directory }}/.zbx_stack_hash"
+  register: zbx_stack_hash_prev
+  failed_when: false
+  changed_when: false
+  when: zbx_need_hash_check
+
+- name: Definir se a stack precisa ser atualizada
+  ansible.builtin.set_fact:
+    zbx_stack_changed: "{{ (zbx_stack_hash_prev.content | default('') | b64decode | trim) != (zbx_stack_hash_content | default('') | trim) }}"
+  when: zbx_need_hash_check
+
+- name: Check Zabbix directories
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  register: zbx_dir_stats
+  changed_when: false
+  loop: "{{ zabbix_directories }}"
+  loop_control:
+    index_var: dir_idx
 
 - name: Create Zabbix directories
   ansible.builtin.file:
     path: "{{ item }}"
     state: directory
     mode: '0777'
+  when: not zbx_dir_stats.results[dir_idx].stat.exists
   loop: "{{ zabbix_directories }}"
+  loop_control:
+    index_var: dir_idx
+
+- name: List Docker stacks
+  ansible.builtin.command:
+    cmd: "docker stack ls --format '{{ \"{{ .Name }}\" }}'"
+  register: stack_list
+  failed_when: false
+  changed_when: false
+
+- name: Definir se a stack existe
+  ansible.builtin.set_fact:
+    zbx_stack_exists: "{{ zabbix_stack_name in (stack_list.stdout_lines | default([])) }}"
 
 - name: Remove stack Docker Swarm
   ansible.builtin.command:
     cmd: docker stack rm "{{ zabbix_stack_name }}"
+  when: zbx_stack_exists and zbx_stack_changed
 
 - name: Deploy Zabbix stack with Docker Swarm
   ansible.builtin.command:
     cmd: docker stack deploy --compose-file {{ item }} "{{ zabbix_stack_name }}"
   loop: "{{ docker_compose_files }}"
+  when: zbx_stack_changed or not zbx_stack_exists
   environment:
     ZBX_IMAGE_VERSION: "{{ zabbix_image_version }}"
     DOMAIN_URL: "{{ zabbix_domain }}"
-    IP_DATABASE: "{{ ip_data_base }}"
     GRAFANA_IMAGE_VERSION: "{{ grafana_image_version }}"
+    TIMESCALE_IMAGE: "{{ timescaledb_image }}"
+
+- name: Salvar hash atual da stack
+  ansible.builtin.copy:
+    dest: "{{ clone_directory }}/.zbx_stack_hash"
+    content: "{{ zbx_stack_hash_content | trim }}"
+    mode: '0644'
+  when: zbx_stack_changed or not zbx_stack_exists
 
 - name: Clean up temporary Compose files
-  ansible.builtin.command:
-    cmd: "rm -rf {{ clone_directory }}"
+  ansible.builtin.file:
+    path: "{{ clone_directory }}"
+    state: absent
+  when: cleanup_clone_directory and zbx_stack_changed

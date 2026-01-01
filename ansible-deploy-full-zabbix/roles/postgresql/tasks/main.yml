@@ -2,8 +2,12 @@
 - name: Set timezone to America/Sao_Paulo
   ansible.builtin.command:
     cmd: timedatectl set-timezone America/Sao_Paulo
-  when: ansible_date_time.tz != "America/Sao_Paulo"
+  when: ansible_facts["date_time"]["tz"] != "America/Sao_Paulo"
   changed_when: false
+- name: Ensure Chrony is installed
+  ansible.builtin.yum:
+    name: chrony
+    state: present
 - name: Ensure Chronyd is enabled and running
   ansible.builtin.systemd:
     name: chronyd
@@ -30,13 +34,23 @@
       ansible.builtin.command:
         cmd: setenforce 0
       ignore_errors: true
-  when: ansible_selinux.status != "disabled"
+  when: ansible_facts["selinux"]["status"] != "disabled"
+
+- name: Set PostgreSQL repo architecture
+  ansible.builtin.set_fact:
+    pgdg_arch: "{{ pgdg_arch_map.get(ansible_facts['architecture'], 'x86_64') }}"
+  vars:
+    pgdg_arch_map:
+      aarch64: aarch64
+      arm64: aarch64
+      x86_64: x86_64
+      amd64: x86_64
 
 - name: Install PostgreSQL repository
   ansible.builtin.yum:
-    name: https://download.postgresql.org/pub/repos/yum/reporpms/EL-9-x86_64/pgdg-redhat-repo-latest.noarch.rpm
+    name: "https://download.postgresql.org/pub/repos/yum/reporpms/EL-9-{{ pgdg_arch }}/pgdg-redhat-repo-latest.noarch.rpm"
     state: present
-    disable_gpg_check: yes
+    disable_gpg_check: true
 
 - name: Install PostgreSQL 16 and dependencies
   ansible.builtin.yum:
@@ -76,13 +90,24 @@
     owner: root
     group: root
     mode: '0644'
+
+- name: Check TimescaleDB support for this architecture
+  ansible.builtin.set_fact:
+    timescaledb_supported: "{{ ansible_facts['architecture'] in ['x86_64', 'amd64'] }}"
+
+- name: Warn when TimescaleDB is not supported on this architecture
+  ansible.builtin.debug:
+    msg: "TimescaleDB não possui pacotes para arquitetura {{ ansible_facts['architecture'] }}. Instalacao sera ignorada."
+  when: not timescaledb_supported
+
 - name: Install TimescaleDB
   ansible.builtin.yum:
     name:
-      - timescaledb-2-postgresql-16-2.17.0-0.el9.x86_64
-      - timescaledb-2-loader-postgresql-16-2.17.0-0.el9.x86_64
+      - timescaledb-2-postgresql-16
+      - timescaledb-2-loader-postgresql-16
     state: present
-    disable_gpg_check: yes
+    disable_gpg_check: true
+  when: timescaledb_supported
 
 - name: Configure pg_hba.conf for MD5 authentication
   ansible.builtin.lineinfile:

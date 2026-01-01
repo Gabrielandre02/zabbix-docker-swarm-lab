@@ -1,111 +1,93 @@
-# Documentação para Configuração com Ansible
+# Zabbix Docker Swarm Lab
 
+Deploy completo do Zabbix em Docker Swarm dentro de uma VM Vagrant.
 
-## Estrutura do Projeto
+## Estrutura do projeto
 ```markdown
 .
-├── ansible.cfg
-├── inventory
-│   └── hosts.ini
-├── playbooks
-│   └── deploy-full-zabbix.yml
-└── roles
-    ├── postgresql
-    │   ├── defaults
-    │   │   └── main.yml
-    │   ├── handlers
-    │   │   └── main.yml
-    │   └── tasks
-    │       └── main.yml
-    ├── zabbix_db
-    │   ├── defaults
-    │   │   └── main.yml
-    │   └── tasks
-    │       └── main.yml
-    └── zbx-docker
-        ├── defaults
-        │   └── main.yml
-        ├── files
-        │   ├── docker-compose.prod.yaml
-        │   ├── docker-compose.traefik.yaml
-        │   └── envs
-        │       ├── dbzbx_prod.env
-        │       ├── zabbix-frontend
-        │       │   └── common.env
-        │       ├── zabbix-java
-        │       │   └── commom.env
-        │       ├── zabbix-proxy
-        │       │   └── common.env
-        │       └── zabbix-server
-        │           └── common.env
-        ├── handlers
-        │   └── main.yml
-        ├── tasks
-        │   └── main.yml
-        └── vars
-            └── main.yml
+├── Makefile
+├── Vagrantfile
+├── settings.yaml
+├── deploy.sh
+├── destroy.sh
+└── ansible-deploy-full-zabbix
+    ├── ansible.cfg
+    ├── inventory
+    │   └── hosts.ini
+    ├── playbooks
+    │   └── deploy-full-zabbix.yml
+    └── roles
+        └── zbx-docker
+            ├── files
+            │   ├── docker-compose.prod.yaml
+            │   ├── docker-compose.traefik.yaml
+            │   └── envs
+            │       ├── dbzbx_prod.env
+            │       ├── zabbix-frontend/common.env
+            │       ├── zabbix-java/commom.env
+            │       ├── zabbix-proxy/common.env
+            │       └── zabbix-server/common.env
+            ├── templates
+            │   └── docker-compose.prod.yaml.j2
+            ├── tasks/main.yml
+            └── vars/main.yml
 ```
-
-
-## DEPLOY
 
 ## Pré-requisitos
+- Vagrant instalado.
+- VirtualBox instalado (provider padrão do Vagrant) e com `VBoxManage` no PATH.
+- Acesso ao `vagrant` via terminal (`vagrant --version`).
 
-### Edite o Arquivo "ansible-deploy-full-zabbix/roles/zbx-docker/vars/main.yml"
+## Configurações principais
+Edite `ansible-deploy-full-zabbix/roles/zbx-docker/vars/main.yml`:
+- `zabbix_image_version`: versão das imagens Zabbix (ex.: `latest`).
+- `grafana_image_version`: versão do Grafana.
+- `zabbix_domain`: domínio usado nas URLs.
+- `zabbix_stack_name`: nome da stack Swarm.
+- `timescaledb_image`: imagem do PostgreSQL com TimescaleDB.
+- `proxy_count`: quantidade de proxies.
+- `proxy_base_port`: porta inicial dos proxies no host.
+- `proxy_hostname_prefix`: prefixo de hostname dos proxies.
 
-##### VARIAVEIS ZABBIX E GRAFANA
+Edite `settings.yaml` (raiz) para ajustar o IP da VM.
 
+## Deploy
 ```bash
-zabbix_image_version: "7.0.6-alpine" - Versao da imagem do Zabbix
-grafana_image_version: "11.4.0" - Versao da Image do Grafana
-zabbix_domain: "exemplo.com.br" - Dominio que era ser anexado na url EX: zabbix.exemplo.com.br.
-zabbix_stack_name: "zbx-swarm" nome da stack . (Caso queira mudar o nome, deve alterar no arquivos de ENVS ansible-deploy-full-zabbix/roles/zbx-docker/files/envs)
-ip_data_base: "10.158.0.4" - IP da database Caso esteja utilizando td na mesma maquina virtual, especificar mesmo assim o IP.
-
-##### EDITAR O INVENTORY E O MESMO IP QUE ESTIVER DECLARO NO Vagrantfile
-
-```bash
-ansible-deploy-full-zabbix/inventory/hosts.ini
+make deploy
 ```
 
-### RODAR O SCRIPT
+O `deploy.sh`:
+- Sobe a VM com Vagrant.
+- Aguarda o SSH ficar disponível.
+- Atualiza o inventory com os dados do `vagrant ssh-config`.
+- Mostra o IP da VM para você mapear o DNS local.
+- Executa o playbook Ansible para instalar Docker e subir o Swarm.
 
-Entre de na pasta ansible-deploy-full-zabbix
-
+## Acesso
+Após o deploy, mapeie o IP da VM no seu DNS local ou `/etc/hosts`:
 ```bash
-cd ansible-deploy-full-zabbix
-```
-De as permissoes de execuçao para o script
-
-```bash
-chmod +x deploy.sh
-```
-
-Execute o script
-
-```bash
-./deploy.sh
+10.0.2.15 zabbix.exemplo.com.br
+10.0.2.15 traefik.exemplo.com.br
+10.0.2.15 grafana.exemplo.com.br
 ```
 
-#### Apos finalizar so mapear nos hosts da sua maquina, ou cadrastrar o ip no seu servidor de DNS.
+URLs:
+- `zabbix.${zabbix_domain}`
+- `traefik.${zabbix_domain}`
+- `grafana.${zabbix_domain}`
 
-#### URL DE ACESSO
-OBS: Temos 3 URL de acesso.
+Credenciais padrão:
+- Zabbix: `Admin` / `zabbix`
+- Grafana: `admin` / `admin`
 
+## Remoção da infra
 ```bash
-zabbix.$zabbix_domain
-traefik.$zabbix_domain
-grafana.$zabbix_domain
+make destroy
 ```
 
-#### Zabbix
-Usuario: Admin
-Senha: zabbix
-
-#### Grafana
-Usuario: admin
-Senha: admin
-
-### Caso queria ativar o Redirect para HTTPS automatico, so descomentar essas linhas no `docker-compose.traefik.yaml`
-
-![alt text]({6274EF1D-EAD1-4856-9D33-9AC510418DB0}.png)
+## Observações
+- Em Apple Silicon, a box padrão é `bento/oraclelinux-9`. Você pode sobrescrever com:
+  `VAGRANT_BOX=alguma/box make deploy`
+- A porta 8080 do host pode ser alterada:
+  `VAGRANT_HOST_PORT=18080 make deploy`
+- Para habilitar HTTPS automático, edite `ansible-deploy-full-zabbix/roles/zbx-docker/files/docker-compose.traefik.yaml`.

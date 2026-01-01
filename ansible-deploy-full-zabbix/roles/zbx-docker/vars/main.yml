@@ -4,6 +4,9 @@ docker_packages:
   - containerd.io
   - docker-compose-plugin
 
+docker_min_version: "24.0.0"
+firewall_zone: "public"
+
 docker_swarm_tcp_ports:
   - 2377
   - 7946
@@ -12,7 +15,6 @@ docker_swarm_tcp_ports:
   - 10050
   - 10051
   - 10052
-  - 8080
 
 docker_swarm_udp_ports:
   - 2377
@@ -25,13 +27,20 @@ zabbix_directories:
   - /data/zabbix-prod/zabbix-server/externalscripts
   - /data/zabbix-prod/zabbix-proxy/externalscripts
   - /data/grafana-prod/data
+  - /data/zabbix-prod/postgres/data
 
 # ALTERAR A VERSAO DO ZABBIX E A URL DE ACESSO AO AMBIENTE DO ZABBIX
-zabbix_image_version: "7.0.6-alpine"
-grafana_image_version: "11.4.0"
+zabbix_image_version: "latest"
+grafana_image_version: "latest"
 zabbix_domain: "exemplo.com.br"
 zabbix_stack_name: "zbx-swarm"
-ip_data_base: "{{ ansible_host }}"
+timescaledb_image: "timescale/timescaledb:latest-pg16"
+db_max_connections: 200
+proxy_count: 1
+proxy_base_port: 10030
+proxy_hostname_prefix: "ZBXSWARNPRX"
+cleanup_clone_directory: false
+force_hash_check: false
 docker_compose_files:
   - "{{ clone_directory }}/docker-compose.traefik.yaml"
   - "{{ clone_directory }}/docker-compose.prod.yaml"

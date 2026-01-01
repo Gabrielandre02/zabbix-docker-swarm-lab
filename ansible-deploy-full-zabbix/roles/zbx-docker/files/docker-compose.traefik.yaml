@@ -1,6 +1,6 @@
 services:
   traefik:
-    image: traefik:v3.3.2
+    image: traefik:latest
     deploy:
       placement:
         constraints:
@@ -12,7 +12,8 @@ services:
         # Dashboard traefik
         - "traefik.enable=true"
         - "traefik.http.services.justAdummyService.loadbalancer.server.port=1337"
-        #- "traefik.http.routers.traefik.tls=true"
+        - "traefik.http.routers.traefik.entrypoints=websecure"
+        - "traefik.http.routers.traefik.tls=true"
         - "traefik.http.routers.traefik.rule=(Host(`traefik.${DOMAIN_URL}`) || Host(`traefik.local`))"
         - "traefik.http.routers.traefik.service=api@internal"
         # Autenticacao Dashboard
@@ -21,26 +22,27 @@ services:
         # # Redirect all HTTP to HTTPS permanently
         - "traefik.http.routers.http_catchall.rule=HostRegexp(`{any:.+}`)"
         - "traefik.http.routers.http_catchall.entrypoints=web"
-        # - "traefik.http.routers.http_catchall.middlewares=https_redirect"
-        # - "traefik.http.middlewares.https_redirect.redirectscheme.scheme=https"
-        # - "traefik.http.middlewares.https_redirect.redirectscheme.permanent=true"
+        - "traefik.http.routers.http_catchall.middlewares=https_redirect"
+        - "traefik.http.middlewares.https_redirect.redirectscheme.scheme=https"
+        - "traefik.http.middlewares.https_redirect.redirectscheme.permanent=true"
     ports:
-      - "0.0.0.0:8080:8080"
-      # - "443:443"
+      - "80:80"
+      - "443:443"
     networks:
       - "monitoring-network"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      #- ./data_internal/traefik/certs-traefik.yml:/etc/traefik/dynamic/certs-traefik.yaml
-      #- ./data_internal/traefik/certs:/etc/certs
+      - ./data_internal/traefik/certs-traefik.yml:/etc/traefik/dynamic/certs-traefik.yaml
+      - ./data_internal/traefik/certs:/etc/certs
     command:
       - "--api=true"
       - "--log.level=DEBUG"
       - "--accesslog=true"
       - "--providers.swarm.endpoint=unix:///var/run/docker.sock"
       - "--providers.swarm.exposedByDefault=false"
-      # - "--providers.file.directory=/etc/traefik/dynamic"
-      - "--entrypoints.web.address=:8080"
+      - "--providers.file.directory=/etc/traefik/dynamic"
+      - "--providers.file.watch=true"
+      - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
       - "--serversTransport.insecureSkipVerify=true"
 

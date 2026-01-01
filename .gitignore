@@ -1,0 +1,14 @@
+.DS_Store
+.vagrant/
+ansible-deploy-full-zabbix/.vagrant/
+
+# Ansible
+*.retry
+
+# Local runtime data
+/data/
+/ansible-deploy-full-zabbix/roles/zbx-docker/files/envs/*.env.bak
+
+# Editor/OS
+*.swp
+*.swo
