@@ -1,14 +1,16 @@
 # Zabbix Docker Swarm Lab
 
-Deploy completo do Zabbix em Docker Swarm dentro de uma VM Vagrant.
+Full Zabbix deployment on Docker Swarm inside a Vagrant VM.
 
-## Estrutura do projeto
+## Project structure
 ```markdown
 .
+├── .gitignore
 ├── Makefile
 ├── Vagrantfile
 ├── settings.yaml
 ├── deploy.sh
+├── stop.sh
 ├── destroy.sh
 └── ansible-deploy-full-zabbix
     ├── ansible.cfg
@@ -19,7 +21,6 @@ Deploy completo do Zabbix em Docker Swarm dentro de uma VM Vagrant.
     └── roles
         └── zbx-docker
             ├── files
-            │   ├── docker-compose.prod.yaml
             │   ├── docker-compose.traefik.yaml
             │   └── envs
             │       ├── dbzbx_prod.env
@@ -28,43 +29,54 @@ Deploy completo do Zabbix em Docker Swarm dentro de uma VM Vagrant.
             │       ├── zabbix-proxy/common.env
             │       └── zabbix-server/common.env
             ├── templates
+            │   ├── certs-traefik.yml.j2
             │   └── docker-compose.prod.yaml.j2
             ├── tasks/main.yml
             └── vars/main.yml
 ```
 
-## Pré-requisitos
-- Vagrant instalado.
-- VirtualBox instalado (provider padrão do Vagrant) e com `VBoxManage` no PATH.
-- Acesso ao `vagrant` via terminal (`vagrant --version`).
+## Prerequisites
+- Vagrant installed.
+- VirtualBox installed (Vagrant default provider) and `VBoxManage` in PATH.
+- CLI access to `vagrant` (`vagrant --version`).
 
-## Configurações principais
-Edite `ansible-deploy-full-zabbix/roles/zbx-docker/vars/main.yml`:
-- `zabbix_image_version`: versão das imagens Zabbix (ex.: `latest`).
-- `grafana_image_version`: versão do Grafana.
-- `zabbix_domain`: domínio usado nas URLs.
-- `zabbix_stack_name`: nome da stack Swarm.
-- `timescaledb_image`: imagem do PostgreSQL com TimescaleDB.
-- `proxy_count`: quantidade de proxies.
-- `proxy_base_port`: porta inicial dos proxies no host.
-- `proxy_hostname_prefix`: prefixo de hostname dos proxies.
+## Main configuration
+Edit `ansible-deploy-full-zabbix/roles/zbx-docker/vars/main.yml`:
+- `zabbix_image_version`: Zabbix image version (e.g. `latest`).
+- `grafana_image_version`: Grafana version.
+- `zabbix_domain`: domain used in URLs.
+- `zabbix_stack_name`: Swarm stack name.
+- `timescaledb_image`: PostgreSQL + TimescaleDB image.
+- `db_max_connections`: PostgreSQL max connections.
+- `proxy_count`: number of proxies.
+- `proxy_base_port`: base host port for proxies.
+- `proxy_hostname_prefix`: proxy hostname prefix.
+- `docker_min_version`: minimum Docker version.
+- `firewall_zone`: firewalld zone used.
+- `cleanup_clone_directory`: remove deploy directory after execution.
+- `force_hash_check`: force hash recalculation.
 
-Edite `settings.yaml` (raiz) para ajustar o IP da VM.
+Edit `settings.yaml` (root) to set the VM IP.
 
 ## Deploy
 ```bash
 make deploy
 ```
 
-O `deploy.sh`:
-- Sobe a VM com Vagrant.
-- Aguarda o SSH ficar disponível.
-- Atualiza o inventory com os dados do `vagrant ssh-config`.
-- Mostra o IP da VM para você mapear o DNS local.
-- Executa o playbook Ansible para instalar Docker e subir o Swarm.
+`deploy.sh`:
+- Boots the VM with Vagrant.
+- Waits for SSH to be available.
+- Updates inventory using `vagrant ssh-config`.
+- Prints the VM IP for local DNS mapping.
+- Runs the Ansible playbook to install Docker and deploy Swarm.
 
-## Acesso
-Após o deploy, mapeie o IP da VM no seu DNS local ou `/etc/hosts`:
+## Stop the VM
+```bash
+make stop
+```
+
+## Access
+After deploy, map the VM IP in your local DNS or `/etc/hosts`:
 ```bash
 10.0.2.15 zabbix.exemplo.com.br
 10.0.2.15 traefik.exemplo.com.br
@@ -76,18 +88,23 @@ URLs:
 - `traefik.${zabbix_domain}`
 - `grafana.${zabbix_domain}`
 
-Credenciais padrão:
+Default credentials:
 - Zabbix: `Admin` / `zabbix`
 - Grafana: `admin` / `admin`
 
-## Remoção da infra
+## Traefik TLS
+- The playbook generates self-signed certificates based on `zabbix_domain`.
+- Files are created in `{{ clone_directory }}/data_internal/traefik/`.
+- Traefik uses the file provider with `certs-traefik.yml`.
+
+## Remove the environment
 ```bash
 make destroy
 ```
 
-## Observações
-- Em Apple Silicon, a box padrão é `bento/oraclelinux-9`. Você pode sobrescrever com:
-  `VAGRANT_BOX=alguma/box make deploy`
-- A porta 8080 do host pode ser alterada:
-  `VAGRANT_HOST_PORT=18080 make deploy`
-- Para habilitar HTTPS automático, edite `ansible-deploy-full-zabbix/roles/zbx-docker/files/docker-compose.traefik.yaml`.
+## Notes
+- On Apple Silicon, the default box is `bento/oraclelinux-9`. Override with:
+  `VAGRANT_BOX=some/box make deploy`
+- Host ports exposed are 80 and 443. Override with:
+  `VAGRANT_HTTP_PORT=8081 VAGRANT_HTTPS_PORT=8443 make deploy`
+- To enable automatic HTTPS redirect, edit `ansible-deploy-full-zabbix/roles/zbx-docker/files/docker-compose.traefik.yaml`.
