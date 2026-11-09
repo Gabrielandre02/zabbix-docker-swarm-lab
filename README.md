@@ -2,6 +2,24 @@
 
 Full Zabbix deployment on Docker Swarm inside a Vagrant VM.
 
+![Docker Swarm](https://img.shields.io/badge/Docker_Swarm-2496ED?style=flat-square) ![Traefik](https://img.shields.io/badge/Traefik-24A1C1?style=flat-square) ![Zabbix](https://img.shields.io/badge/Zabbix-D40000?style=flat-square) ![Grafana](https://img.shields.io/badge/Grafana-F46800?style=flat-square) ![Ansible](https://img.shields.io/badge/Ansible-EE0000?style=flat-square) ![Vagrant](https://img.shields.io/badge/Vagrant-1868F2?style=flat-square)
+
+## Architecture
+
+```mermaid
+flowchart LR
+    user([Browser]) -->|HTTPS| traefik[Traefik]
+    subgraph vm [Vagrant VM - Docker Swarm]
+        traefik --> web[Zabbix web]
+        traefik --> grafana[Grafana]
+        web --> server[Zabbix server]
+        server --> db[(PostgreSQL + TimescaleDB)]
+        server --> java[Java gateway]
+        proxy[Zabbix proxies] --> server
+    end
+    ansible[Ansible] -. provisions and deploys .-> vm
+```
+
 ## Project structure
 ```markdown
 .
